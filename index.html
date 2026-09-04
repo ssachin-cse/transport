@@ -3,20 +3,20 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Transport Manager — HTML (Offline)</title>
+  <title>Transport Manager</title>
   <link rel="stylesheet" href="assets/style.css">
   <link rel="manifest" href="manifest.webmanifest">
   <meta name="theme-color" content="#0f172a">
 </head>
 <body>
   <aside class="sidebar">
-    <div class="brand">🚚 Transport (Offline)</div>
+    <div class="brand">🚚 Transport</div>
     <nav>
-      <a data-tab="dash" class="active">Dashboard</a>
+      <a data-tab="records" class="active">Records</a>
       <a data-tab="drivers">Drivers</a>
       <a data-tab="attendance">Attendance</a>
       <a data-tab="vehicles">Vehicles</a>
-      <a data-tab="records">Records</a>
+      <a data-tab="driver-reports">Drivers Report</a>
       <a data-tab="reports">Reports</a>
       <hr>
       <a data-tab="backup">Backup/Restore</a>
@@ -24,22 +24,6 @@
 
   </aside>
   <main class="content">
-    <section id="tab-dash" class="tab active">
-      <h1>Dashboard</h1>
-      <div class="cards">
-        <div class="card"><h3>Total Income</h3><div class="big" id="sum-income">₹0.00</div></div>
-        <div class="card"><h3>Total Expense</h3><div class="big" id="sum-expense">₹0.00</div></div>
-        <div class="card"><h3>Net</h3><div class="big" id="sum-net">₹0.00</div></div>
-        <div class="card"><h3>Drivers</h3><div class="big" id="count-drivers">0</div></div>
-        <div class="card"><h3>Vehicles</h3><div class="big" id="count-vehicles">0</div></div>
-      </div>
-      <h2>Recent Records</h2>
-      <table id="table-vehicles">
-            <thead><tr><th>No</th><th>Model</th><th>Type</th><th>Owner</th><th>Docs</th><th></th></tr></thead>
-            <tbody></tbody>
-      </table>
-    </section>
-
     <section id="tab-drivers" class="tab">
       <h1>Drivers</h1>
       <div class="grid one">
@@ -110,6 +94,10 @@
           
             <label>Date<input type="date" name="adate" required></label>
             <label>Driver<select name="driver_id" required></select></label>
+            <label>Vehicle No<select name="vehicle_id"></select></label>
+            <label>From<input name="from" placeholder="Starting point"></label>
+            <label>To<input name="to" placeholder="Destination"></label>
+            <label>Report<input name="report" placeholder="Trip report"></label>
             <label>Status
               <select name="status" required>
                 <option value="Present">Present</option>
@@ -124,9 +112,15 @@
         </div>
         <div>
           <h2>Attendance Records</h2>
+          <form id="attendance-filters" class="filters">
+            <label>From<input type="date" name="from"></label>
+            <label>To<input type="date" name="to"></label>
+            <button type="submit">Apply</button>
+            <button type="button" id="export-attendance">Export Excel</button>
+          </form>
           <table id="table-attendance">
             <thead>
-              <tr><th>Date</th><th>Driver</th><th>Status</th><th>Note</th><th></th></tr>
+              <tr><th>Date</th><th>Vehicle No</th><th>Driver</th><th>From</th><th>To</th><th>Report</th><th>Status</th><th></th></tr>
             </thead>
             <tbody></tbody>
           </table>
@@ -149,15 +143,18 @@
           <h2>Add Record</h2>
           <form id="form-record" class="form-grid">
             <label>Date<input type="date" name="rdate" required></label>
-            <label>Vehicle<select name="vehicle_id"></select></label>
             <label>Driver<select name="driver_id"></select></label>
-            <label>Description<input name="description" placeholder="Fuel @ HPCL, Trip, Toll, etc."></label>
-            <label>Type<select name="rtype"><option>Expense</option><option>Income</option></select></label>
-            <label>Amount<input type="number" step="0.01" min="0" name="amount" required></label>
-            <label>Status<select name="status"><option>Paid</option><option>Received</option><option>Pending</option></select></label>
-            <label>Category<select name="category"><option>Fuel</option><option>Toll</option><option>Beta</option><option>Maintenance</option><option>Other</option></select></label>
-            <label>Pay Mode<select name="paymode"><option>Cash</option><option>UPI</option><option>Bank</option><option>Credit</option><option>Other</option></select></label>
-            <label>Note<input name="note"></label>
+            <label>Status<select name="status"><option>Planned</option><option>Completed</option><option>Cancelled</option></select></label>
+            <label>Vehicle No<select name="vehicle_id"></select></label>
+            <label>From<input name="from" placeholder="Starting point"></label>
+            <label>To<input name="to" placeholder="Destination"></label>
+            <label>Report<input name="report" placeholder="Trip report"></label>
+            <input type="hidden" name="rtype" value="None">
+            <input type="hidden" name="amount" value="0">
+            <input type="hidden" name="description" value="">
+            <input type="hidden" name="category" value="None">
+            <input type="hidden" name="paymode" value="None">
+            <input type="hidden" name="note" value="">
             <button>Save Record</button>
           </form>
         </div>
@@ -166,18 +163,31 @@
           <form id="filters" class="filters">
             <label>From<input type="date" name="from"></label>
             <label>To<input type="date" name="to"></label>
-            <label>Type<select name="typ"><option value="">All</option><option>Expense</option><option>Income</option></select></label>
             <label>Vehicle<select name="veh"><option value="">All</option></select></label>
             <label>Driver<select name="drv"><option value="">All</option></select></label>
             <button type="submit">Apply</button>
-            <button type="button" id="export-records">Export CSV</button>
+            <button type="button" id="export-records">Export Excel</button>
           </form>
           <table id="table-records">
-            <thead><tr><th>S No</th><th>Date</th><th>Vehicle</th><th>Driver</th><th>Description</th><th>Type</th><th>Amount</th><th>Status</th><th>Category</th><th>Pay</th><th>Note</th><th></th></tr></thead>
+            <thead><tr><th>S No</th><th>Date</th><th>Driver</th><th>Status</th><th>Vehicle No</th><th>From</th><th>To</th><th>Report</th><th></th></tr></thead>
             <tbody></tbody>
           </table>
         </div>
       </div>
+    </section>
+
+    <section id="tab-driver-reports" class="tab">
+      <h1>Drivers Report</h1>
+      <form id="driver-report-filters" class="filters">
+        <label>Month<input type="month" name="month" required></label>
+        <label>Driver<select name="driver_id"><option value="">All Drivers</option></select></label>
+        <button type="submit">Apply</button>
+        <button type="button" id="export-driver-report">Export Excel</button>
+      </form>
+      <table id="table-driver-report">
+        <thead><tr><th>Date</th><th>Name</th><th>Status</th><th>Vehicle No</th><th>Report</th></tr></thead>
+        <tbody></tbody>
+      </table>
     </section>
 
     <section id="tab-reports" class="tab">
