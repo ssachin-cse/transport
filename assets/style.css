@@ -26,6 +26,7 @@ button.danger{background:var(--danger)}
 hr{border:none;border-top:1px solid rgba(255,255,255,.15);margin:8px 0}
 @media(max-width:1200px){.cards{grid-template-columns:repeat(3,minmax(0,1fr))}.grid.two{grid-template-columns:1fr}.content{margin-left:0}.sidebar{position:static;width:auto}}
 @media(max-width:640px){.cards{grid-template-columns:repeat(2,minmax(0,1fr))} .form-grid{grid-template-columns:1fr}}
+/* --- Mobile Responsive Fix --- */
 @media (max-width: 768px) {
   header {
     flex-direction: column;
