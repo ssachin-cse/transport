@@ -1,429 +1,52 @@
-/* Transport Manager — Pure HTML/JS (IndexedDB) */
+/* Transport Manager - IndexedDB */
 (function(){
-  const $ = sel => document.querySelector(sel);
-  const $$ = sel => Array.from(document.querySelectorAll(sel));
-  const formatINR = v => '₹' + (Number(v||0)).toLocaleString(undefined,{minimumFractionDigits:2, maximumFractionDigits:2});
+  const $=s=>document.querySelector(s), $$=s=>Array.from(document.querySelectorAll(s)); let db;
+  const req=indexedDB.open('transport_offline_db',3);
+  req.onupgradeneeded=e=>{db=e.target.result;const names=['drivers','attendance','vehicles','records'];const keys={drivers:'name',attendance:'adate',vehicles:'vehicle_no',records:'rdate'};for(const name of names){const os=db.objectStoreNames.contains(name)?e.target.transaction.objectStore(name):db.createObjectStore(name,{keyPath:'id',autoIncrement:true});if(!os.indexNames.contains(name==='attendance'?'date':name))os.createIndex(name==='attendance'?'date':name,keys[name],{unique:false});}};
+  req.onsuccess=e=>{db=e.target.result;defaults();fillLookups();fillAttendanceLookups();fillDriverReportDrivers();loadRecords();loadAttendance();runDriverReport();runMonthlyReport(today().slice(0,7));};
+  req.onerror=e=>alert('DB error: '+e.target.error);
+  const os=(n,m='readonly')=>db.transaction(n,m).objectStore(n);
+  const all=n=>new Promise((res,rej)=>{const r=os(n).getAll();r.onsuccess=()=>res(r.result||[]);r.onerror=()=>rej(r.error);});
+  const add=(n,v)=>new Promise((res,rej)=>{const r=os(n,'readwrite').add(v);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error);});
+  const put=(n,v)=>new Promise((res,rej)=>{const r=os(n,'readwrite').put(v);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error);});
+  const del=(n,id)=>new Promise((res,rej)=>{const r=os(n,'readwrite').delete(id);r.onsuccess=()=>res();r.onerror=()=>rej(r.error);});
+  const today=()=>new Date().toISOString().slice(0,10), val=(f,n)=>f.elements[n].value.trim(), esc=v=>String(v||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const opt=(s,text,id)=>s.add(new Option(text,id));
+  function defaults(){const r=$('#form-record [name=rdate]'),a=$('#form-attendance [name=adate]'),m=$('#driver-report-filters [name=month]');if(r)r.value=today();if(a)a.value=today();if(m)m.value=today().slice(0,7);}
+  $$('.sidebar nav a').forEach(a=>a.onclick=()=>{$$('.sidebar nav a').forEach(x=>x.classList.remove('active'));a.classList.add('active');$$('.tab').forEach(x=>x.classList.remove('active'));$('#tab-'+a.dataset.tab).classList.add('active');if(a.dataset.tab==='records'){fillLookups();loadRecords();}if(a.dataset.tab==='attendance'){fillAttendanceLookups();loadAttendance();}if(a.dataset.tab==='driver-reports'){fillDriverReportDrivers();runDriverReport();}if(a.dataset.tab==='drivers')loadDrivers();if(a.dataset.tab==='vehicles')loadVehicles();});
 
-  // Tabs
-  $$('.sidebar nav a').forEach(a=>a.addEventListener('click',()=>{
-    $$('.sidebar nav a').forEach(x=>x.classList.remove('active'));
-    a.classList.add('active');
-    const tab = a.dataset.tab;
-    $$('.tab').forEach(t=>t.classList.remove('active'));
-    $('#tab-' + tab).classList.add('active');
-    if(tab==='drivers') loadDrivers();
-    if(tab==='attendance') { fillAttendanceDrivers(); loadAttendance(); }
-    if(tab==='vehicles') loadVehicles();
-    if(tab==='records') { fillLookups(); loadRecords(); }
-    if(tab==='dash') refreshDashboard();
-  }));
+  $('#form-driver').onsubmit=async e=>{e.preventDefault();const f=e.target,d={name:val(f,'name'),mobile:val(f,'mobile'),license_no:val(f,'license_no'),aadhaar_no:val(f,'aadhaar_no'),pan_no:val(f,'pan_no'),epf_no:val(f,'epf_no'),esi_no:val(f,'esi_no'),insurance_no:val(f,'insurance_no')};for(const k of ['doc_license','doc_aadhaar','doc_pan','doc_esi','doc_insurance']){const file=f.elements[k].files[0];if(file){if(file.size>10*1024*1024||!['image/jpeg','image/png','application/pdf'].includes(file.type)){alert('Invalid or oversized file: '+k);return;}d[k]=await fileStored(file);}}await add('drivers',d);f.reset();loadDrivers();fillLookups();fillAttendanceLookups();fillDriverReportDrivers();};
+  async function loadDrivers(){const list=await all('drivers'),tb=$('#table-drivers tbody');tb.innerHTML='';for(const d of list){const docs=['doc_license','doc_aadhaar','doc_pan','doc_esi','doc_insurance'].filter(k=>d[k]).map(k=>docLink(d[k],k.replace('doc_','').toUpperCase())).join(' '),tr=document.createElement('tr');tr.innerHTML=`<td>${esc(d.name)}</td><td>${esc(d.mobile)}</td><td>${docs||'<span class="muted">None</span>'}</td><td><button class="danger small" data-del="${d.id}">Delete</button></td>`;tb.appendChild(tr);}tb.querySelectorAll('[data-del]').forEach(b=>b.onclick=async()=>{if(confirm('Delete this driver?')){await del('drivers',+b.dataset.del);loadDrivers();fillLookups();fillAttendanceLookups();fillDriverReportDrivers();}});}
 
-    
-  // IndexedDB setup
-  let db;
-  const req = indexedDB.open('transport_offline_db', 3);
-  req.onupgradeneeded = e => {
-    db = e.target.result;
-    const drivers = db.createObjectStore('drivers', { keyPath: 'id', autoIncrement: true });
-    const attendance = db.createObjectStore('attendance', { keyPath: 'id', autoIncrement: true });
-    const vehicles = db.createObjectStore('vehicles', { keyPath: 'id', autoIncrement: true });
-    const records = db.createObjectStore('records', { keyPath: 'id', autoIncrement: true });
+  $('#form-vehicle').onsubmit=async e=>{e.preventDefault();const f=e.target,d={vehicle_no:val(f,'vehicle_no'),model:val(f,'model'),vtype:val(f,'vtype'),owner:val(f,'owner')};for(const k of ['doc_rc','doc_permit','doc_fc','doc_insurance','doc_invoice']){const file=f.elements[k].files[0];if(file){if(file.size>10*1024*1024||!['image/jpeg','image/png','application/pdf'].includes(file.type)){alert('Invalid or oversized file: '+k);return;}d[k]=await fileStored(file);}}await add('vehicles',d);f.reset();loadVehicles();fillLookups();fillAttendanceLookups();};
+  async function loadVehicles(){const list=await all('vehicles'),tb=$('#table-vehicles tbody');tb.innerHTML='';for(const v of list){const docs=['doc_rc','doc_permit','doc_fc','doc_insurance','doc_invoice'].filter(k=>v[k]).map(k=>docLink(v[k],k.replace('doc_','').toUpperCase())).join(' '),tr=document.createElement('tr');tr.innerHTML=`<td>${esc(v.vehicle_no)}</td><td>${esc(v.model)}</td><td>${esc(v.vtype)}</td><td>${esc(v.owner)}</td><td>${docs||'<span class="muted">None</span>'}</td><td><button class="danger small" data-del="${v.id}">Delete</button></td>`;tb.appendChild(tr);}tb.querySelectorAll('[data-del]').forEach(b=>b.onclick=async()=>{if(confirm('Delete this vehicle?')){await del('vehicles',+b.dataset.del);loadVehicles();fillLookups();fillAttendanceLookups();}});}
 
+  async function fillLookups(){const [vs,ds]=await Promise.all([all('vehicles'),all('drivers')]),va=$('#form-record [name=vehicle_id]'),da=$('#form-record [name=driver_id]'),vf=$('#filters [name=veh]'),df=$('#filters [name=drv]');if(!va)return;va.innerHTML=da.innerHTML='<option value="">Select</option>';vf.innerHTML=df.innerHTML='<option value="">All</option>';vs.forEach(v=>{opt(va,v.vehicle_no,v.id);opt(vf,v.vehicle_no,v.id);});ds.forEach(d=>{opt(da,d.name,d.id);opt(df,d.name,d.id);});}
+  async function fillAttendanceLookups(){const [vs,ds]=await Promise.all([all('vehicles'),all('drivers')]),v=$('#form-attendance [name=vehicle_id]'),d=$('#form-attendance [name=driver_id]');if(!v)return;v.innerHTML='<option value="">Select</option>';d.innerHTML='<option value="">Select</option>';vs.forEach(x=>opt(v,x.vehicle_no,x.id));ds.forEach(x=>opt(d,x.name,x.id));}
 
-    drivers.createIndex('name', 'name', { unique: false });
-    attendance.createIndex('date', 'date', { unique: false });
-    vehicles.createIndex('vehicle_no', 'vehicle_no', { unique: false });
-    records.createIndex('rdate', 'rdate', { unique: false });
-  };
-  req.onsuccess = e => { db = e.target.result; initializeDefaults(); refreshDashboard(); };
-  req.onerror = e => alert('DB error: ' + e.target.error);
+  $('#form-attendance').onsubmit=async e=>{e.preventDefault();const f=e.target;await add('attendance',{adate:val(f,'adate'),driver_id:+val(f,'driver_id'),vehicle_id:val(f,'vehicle_id')?+val(f,'vehicle_id'):null,from:val(f,'from'),to:val(f,'to'),report:val(f,'report'),status:val(f,'status'),note:val(f,'note')});f.reset();f.elements.adate.value=today();loadAttendance();runDriverReport();};
+  async function loadAttendance(){const [rows,ds,vs]=await Promise.all([all('attendance'),all('drivers'),all('vehicles')]),dm=new Map(ds.map(d=>[d.id,d.name])),vm=new Map(vs.map(v=>[v.id,v.vehicle_no])),f=$('#attendance-filters'),from=f.elements.from.value,to=f.elements.to.value,tb=$('#table-attendance tbody');tb.innerHTML='';rows.filter(r=>(!from||r.adate>=from)&&(!to||r.adate<=to)).sort((a,b)=>b.adate.localeCompare(a.adate)||b.id-a.id).forEach(r=>{const tr=document.createElement('tr');tr.innerHTML=`<td>${esc(r.adate)}</td><td>${esc(vm.get(r.vehicle_id))}</td><td>${esc(dm.get(r.driver_id))}</td><td>${esc(r.from)}</td><td>${esc(r.to)}</td><td>${esc(r.report||r.note)}</td><td>${esc(r.status)}</td><td><button class="small" data-edit="${r.id}">Edit</button> <button class="danger small" data-del="${r.id}">Delete</button></td>`;tb.appendChild(tr);});tb.querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>editAttendance(+b.dataset.edit));tb.querySelectorAll('[data-del]').forEach(b=>b.onclick=async()=>{if(confirm('Delete this attendance record?')){await del('attendance',+b.dataset.del);loadAttendance();runDriverReport();}});}
+  $('#attendance-filters').onsubmit=e=>{e.preventDefault();loadAttendance();};$('#export-attendance').onclick=exportAttendance;
+  async function editAttendance(id){const r=(await all('attendance')).find(x=>x.id===id);if(!r)return;for(const [k,label] of [['adate','Date (YYYY-MM-DD)'],['from','From'],['to','To'],['report','Report'],['status','Status']]){const x=prompt(label,r[k]||'');if(x===null)return;r[k]=x;}await put('attendance',r);loadAttendance();runDriverReport();}
 
-  function tx(store, mode='readonly'){ return db.transaction(store, mode).objectStore(store); }
-  function all(store){ return new Promise((res,rej)=>{ const r=tx(store).getAll(); r.onsuccess=()=>res(r.result||[]); r.onerror=()=>rej(r.error); }); }
-  function add(store, obj){ return new Promise((res,rej)=>{ const r=tx(store,'readwrite').add(obj); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); }); }
-  function put(store, obj){ return new Promise((res,rej)=>{ const r=tx(store,'readwrite').put(obj); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); }); }
-  function del(store, id){ return new Promise((res,rej)=>{ const r=tx(store,'readwrite').delete(id); r.onsuccess=()=>res(); r.onerror=()=>rej(r.error); }); }
+  $('#form-record').onsubmit=async e=>{e.preventDefault();const f=e.target;await add('records',{rdate:val(f,'rdate'),driver_id:val(f,'driver_id')?+val(f,'driver_id'):null,status:val(f,'status'),vehicle_id:val(f,'vehicle_id')?+val(f,'vehicle_id'):null,from:val(f,'from'),to:val(f,'to'),report:val(f,'report'),rtype:'None',amount:0,description:'',category:'None',paymode:'None',note:'',created_at:Date.now()});f.reset();f.elements.rdate.value=today();loadRecords();};
+  async function loadRecords(){const [rows,ds,vs]=await Promise.all([all('records'),all('drivers'),all('vehicles')]),dm=new Map(ds.map(d=>[d.id,d.name])),vm=new Map(vs.map(v=>[v.id,v.vehicle_no])),f=$('#filters'),from=f.elements.from.value,to=f.elements.to.value,vehicle=f.elements.veh.value,driver=f.elements.drv.value,tb=$('#table-records tbody');tb.innerHTML='';rows.filter(r=>(!from||r.rdate>=from)&&(!to||r.rdate<=to)&&(!vehicle||String(r.vehicle_id)===vehicle)&&(!driver||String(r.driver_id)===driver)).sort((a,b)=>b.rdate.localeCompare(a.rdate)||b.id-a.id).forEach((r,i)=>{const tr=document.createElement('tr');tr.innerHTML=`<td>${i+1}</td><td>${esc(r.rdate)}</td><td>${esc(dm.get(r.driver_id))}</td><td>${esc(r.status)}</td><td>${esc(vm.get(r.vehicle_id))}</td><td>${esc(r.from)}</td><td>${esc(r.to)}</td><td>${esc(r.report)}</td><td><button class="small" data-edit="${r.id}">Edit</button> <button class="danger small" data-del="${r.id}">Delete</button></td>`;tb.appendChild(tr);});tb.querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>editRecord(+b.dataset.edit));tb.querySelectorAll('[data-del]').forEach(b=>b.onclick=async()=>{if(confirm('Delete this record?')){await del('records',+b.dataset.del);loadRecords();}});}
+  $('#filters').onsubmit=e=>{e.preventDefault();loadRecords();};$('#export-records').onclick=exportRecords;
+  async function editRecord(id){const r=(await all('records')).find(x=>x.id===id);if(!r)return;for(const [k,label] of [['rdate','Date (YYYY-MM-DD)'],['status','Status'],['from','From'],['to','To'],['report','Report']]){const x=prompt(label,r[k]||'');if(x===null)return;r[k]=x;}await put('records',r);loadRecords();}
+  async function exportRecords(){const [rows,ds,vs]=await Promise.all([all('records'),all('drivers'),all('vehicles')]),dm=new Map(ds.map(d=>[d.id,d.name])),vm=new Map(vs.map(v=>[v.id,v.vehicle_no])),f=$('#filters'),from=f.elements.from.value,to=f.elements.to.value,vehicle=f.elements.veh.value,driver=f.elements.drv.value,out=[['S.no','Date','Driver','Status','Vehicle No','From','To','Report']];rows.filter(r=>(!from||r.rdate>=from)&&(!to||r.rdate<=to)&&(!vehicle||String(r.vehicle_id)===vehicle)&&(!driver||String(r.driver_id)===driver)).sort((a,b)=>a.rdate.localeCompare(b.rdate)).forEach((r,i)=>out.push([i+1,r.rdate,dm.get(r.driver_id)||'',r.status||'',vm.get(r.vehicle_id)||'',r.from||'',r.to||'',r.report||'']));downloadExcel(out,'records.xls');}
+  async function exportAttendance(){const [rows,ds,vs]=await Promise.all([all('attendance'),all('drivers'),all('vehicles')]),dm=new Map(ds.map(d=>[d.id,d.name])),vm=new Map(vs.map(v=>[v.id,v.vehicle_no])),f=$('#attendance-filters'),from=f.elements.from.value,to=f.elements.to.value,out=[['Date','Vehicle No','Driver','From','To','Report','Status']];rows.filter(r=>(!from||r.adate>=from)&&(!to||r.adate<=to)).sort((a,b)=>a.adate.localeCompare(b.adate)).forEach(r=>out.push([r.adate,vm.get(r.vehicle_id)||'',dm.get(r.driver_id)||'',r.from||'',r.to||'',r.report||r.note||'',r.status||'']));downloadExcel(out,'attendance.xls');}
 
-  function today(){ return new Date().toISOString().slice(0,10); }
+  async function fillDriverReportDrivers(){const ds=await all('drivers'),s=$('#driver-report-filters [name=driver_id]'),old=s.value;s.innerHTML='<option value="">All Drivers</option>';ds.forEach(d=>opt(s,d.name,d.id));s.value=old;}
+  async function driverRows(){const [rows,ds,vs]=await Promise.all([all('attendance'),all('drivers'),all('vehicles')]),dm=new Map(ds.map(d=>[d.id,d.name])),vm=new Map(vs.map(v=>[v.id,v.vehicle_no])),f=$('#driver-report-filters'),month=f.elements.month.value||today().slice(0,7),driver=f.elements.driver_id.value;return rows.filter(r=>r.adate.slice(0,7)===month&&(!driver||String(r.driver_id)===driver)).sort((a,b)=>a.adate.localeCompare(b.adate)).map(r=>[r.adate,dm.get(r.driver_id)||'',r.status||'',vm.get(r.vehicle_id)||'',r.report||r.note||'']);}
+  async function runDriverReport(){const tb=$('#table-driver-report tbody');if(!tb)return;tb.innerHTML='';(await driverRows()).forEach(r=>{const tr=document.createElement('tr');tr.innerHTML=r.map(esc).map(x=>`<td>${x}</td>`).join('');tb.appendChild(tr);});}
+  $('#driver-report-filters').onsubmit=e=>{e.preventDefault();runDriverReport();};$('#export-driver-report').onclick=async()=>downloadExcel([['Date','Name','Status','Vehicle No','Report'],...(await driverRows())],'drivers_report.xls');
 
-  // Initialize defaults (set today's date in form)
-  function initializeDefaults(){
-    const d = $('#form-record [name=rdate]'); if(d) d.value = today();
-    const a = $('#form-attendance [name=adate]'); if(a) a.value = today();
-  }
-
-  // ------- Drivers -------
-  $('#form-driver').addEventListener('submit', async (e)=>{
-    e.preventDefault();
-    const f = e.target;
-    const data = {
-      name: f.name.value.trim(),
-      mobile: f.mobile.value.trim(),
-      license_no: f.license_no.value.trim(),
-      aadhaar_no: f.aadhaar_no.value.trim(),
-      pan_no: f.pan_no.value.trim(),
-      epf_no: f.epf_no.value.trim(),
-      esi_no: f.esi_no.value.trim(),
-      insurance_no: f.insurance_no.value.trim(),
-    };
-    const files = ['doc_license','doc_aadhaar','doc_pan','doc_esi','doc_insurance'];
-    for(const k of files){
-      const file = f[k].files[0];
-      if(file){
-        if(file.size > 10*1024*1024){ alert('File too large (max 10MB): ' + k); return; }
-        const ok = ['image/jpeg','image/png','application/pdf'].includes(file.type);
-        if(!ok){ alert('Invalid type for ' + k); return; }
-        data[k] = await fileToStored(file);
-      }
-    }
-    await add('drivers', data);
-    f.reset();
-    loadDrivers();
-    fillLookups();
-  });
-
-  async function loadDrivers(){
-    const list = await all('drivers');
-    $('#count-drivers').textContent = list.length;
-    const tb = $('#table-drivers tbody'); tb.innerHTML='';
-    for(const d of list){
-      const docs = ['doc_license','doc_aadhaar','doc_pan','doc_esi','doc_insurance']
-        .filter(k=>d[k])
-        .map(k=>docLink(d[k], k.replace('doc_','').toUpperCase()))
-        .join(' ');
-      const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${escapeHTML(d.name)}</td>
-                      <td>${escapeHTML(d.mobile||'')}</td>
-                      <td>${docs||'<span class="muted">None</span>'}</td>
-                      <td><button class="danger small" data-del="${d.id}">Delete</button></td>`;
-      tb.appendChild(tr);
-    }
-    tb.querySelectorAll('[data-del]').forEach(btn=>btn.addEventListener('click', async ()=>{
-      if(confirm('Delete this driver?')){ await del('drivers', Number(btn.dataset.del)); loadDrivers(); fillLookups(); }
-    }));
-  }
-
-
-  $('#form-attendance')?.addEventListener('submit', async e=>{
-    e.preventDefault();
-    const f = e.target;
-    const data = {
-      adate: f.adate.value,
-      driver_id: Number(f.driver_id.value),
-      status: f.status.value,
-      note: f.note.value.trim()
-    };
-    await add('attendance', data);
-    f.reset(); f.adate.value = today();
-    loadAttendance();
-  });
-
-  async function loadAttendance(){
-    const [records, drivers] = await Promise.all([all('attendance'), all('drivers')]);
-    const drvMap = new Map(drivers.map(d=>[d.id, d.name]));
-    const tb = $('#table-attendance tbody'); tb.innerHTML='';
-    if(records.length===0){ tb.innerHTML=`<tr><td colspan="5" class="muted">No records</td></tr>`; return; }
-    for(const r of records.sort((a,b)=> b.adate.localeCompare(a.adate))){
-      const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${r.adate}</td>
-        <td>${escapeHTML(drvMap.get(r.driver_id)||'')}</td>
-        <td>${r.status}</td>
-        <td>${escapeHTML(r.note||'')}</td>
-        <td><button class="danger small" data-del="${r.id}">Delete</button></td>`;
-      tb.appendChild(tr);
-    }
-    tb.querySelectorAll('[data-del]').forEach(btn=>btn.addEventListener('click', async ()=>{
-      if(confirm('Delete this attendance record?')){ await del('attendance', Number(btn.dataset.del)); loadAttendance(); }
-    }));
-  }
-
-  async function fillAttendanceDrivers(){
-    const drivers = await all('drivers');
-    const sel = $('#form-attendance [name=driver_id]');
-    if(!sel) return;
-    sel.innerHTML = '<option value="">— Select —</option>';
-    for(const d of drivers){
-      const o = new Option(d.name, d.id); sel.add(o);
-    }
-  }
-  // ------- Vehicles -------
-  $('#form-vehicle').addEventListener('submit', async (e)=>{
-    e.preventDefault();
-    const f = e.target;
-    const data = {
-      vehicle_no: f.vehicle_no.value.trim(),
-      model: f.model.value.trim(),
-      vtype: f.vtype.value.trim(),
-      owner: f.owner.value.trim(),
-    };
-    const files = ['doc_rc','doc_permit','doc_fc','doc_insurance','doc_invoice'];
-    for(const k of files){
-      const file = f[k].files[0];
-      if(file){
-        if(file.size > 10*1024*1024){ alert('File too large (max 10MB): ' + k); return; }
-        const ok = ['image/jpeg','image/png','application/pdf'].includes(file.type);
-        if(!ok){ alert('Invalid type for ' + k); return; }
-        data[k] = await fileToStored(file);
-      }
-    }
-    await add('vehicles', data);
-    f.reset();
-    loadVehicles();
-    fillLookups();
-  });
-
-  async function loadVehicles(){
-    const list = await all('vehicles');
-    $('#count-vehicles').textContent = list.length;
-    const tb = $('#table-vehicles tbody'); tb.innerHTML='';
-    for(const v of list){
-      const docs = ['doc_rc','doc_permit','doc_fc','doc_insurance','doc_invoice']
-        .filter(k=>v[k])
-        .map(k=>docLink(v[k], k.replace('doc_','').toUpperCase()))
-        .join(' ');
-      const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${escapeHTML(v.vehicle_no)}</td>
-                      <td>${escapeHTML(v.model||'')}</td>
-                      <td>${escapeHTML(v.vtype||'')}</td>
-                      <td>${escapeHTML(v.owner||'')}</td>
-                      <td>${docs||'<span class="muted">None</span>'}</td>
-                      <td><button class="danger small" data-del="${v.id}">Delete</button></td>`;
-      tb.appendChild(tr);
-    }
-    tb.querySelectorAll('[data-del]').forEach(btn=>btn.addEventListener('click', async ()=>{
-      if(confirm('Delete this vehicle?')){ await del('vehicles', Number(btn.dataset.del)); loadVehicles(); fillLookups(); }
-    }));
-  }
-
-  // ------- Records -------
-  $('#form-record').addEventListener('submit', async (e)=>{
-    e.preventDefault();
-    const f = e.target;
-    const data = {
-      rdate: f.rdate.value,
-      vehicle_id: f.vehicle_id.value? Number(f.vehicle_id.value) : null,
-      driver_id: f.driver_id.value? Number(f.driver_id.value) : null,
-      description: f.description.value.trim(),
-      rtype: f.rtype.value,
-      amount: Number(f.amount.value || 0),
-      status: f.status.value,
-      category: f.category.value,
-      paymode: f.paymode.value,
-      note: f.note.value.trim(),
-      created_at: Date.now()
-    };
-    await add('records', data);
-    f.reset(); f.rdate.value = today();
-    loadRecords(); refreshDashboard();
-  });
-
-  async function loadRecords(){
-    const [list, vehicles, drivers] = await Promise.all([all('records'), all('vehicles'), all('drivers')]);
-    const vehMap = new Map(vehicles.map(v=>[v.id, v.vehicle_no]));
-    const drvMap = new Map(drivers.map(d=>[d.id, d.name]));
-
-    // Filters
-    const f = $('#filters');
-    const from = f.from.value;
-    const to = f.to.value;
-    const typ = f.typ.value;
-    const veh = f.veh.value;
-    const drv = f.drv.value;
-
-    let rows = list.sort((a,b)=> (b.rdate.localeCompare(a.rdate)) || (b.id - a.id));
-    rows = rows.filter(r => (!from || r.rdate >= from) && (!to || r.rdate <= to));
-    rows = rows.filter(r => (!typ || r.rtype===typ) && (!veh || String(r.vehicle_id)===veh) && (!drv || String(r.driver_id)===drv));
-
-    const tb = $('#table-records tbody'); tb.innerHTML='';
-    let i=1;
-    for(const r of rows){
-      const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${i++}</td>
-        <td>${r.rdate}</td>
-        <td>${escapeHTML(vehMap.get(r.vehicle_id)||'')}</td>
-        <td>${escapeHTML(drvMap.get(r.driver_id)||'')}</td>
-        <td>${escapeHTML(r.description||'')}</td>
-        <td>${r.rtype}</td>
-        <td>${formatINR(r.amount)}</td>
-        <td>${r.status}</td>
-        <td>${r.category}</td>
-        <td>${r.paymode}</td>
-        <td>${escapeHTML(r.note||'')}</td>
-        <td><button class="danger small" data-del="${r.id}">Delete</button></td>`;
-      tb.appendChild(tr);
-    }
-    tb.querySelectorAll('[data-del]').forEach(btn=>btn.addEventListener('click', async ()=>{
-      if(confirm('Delete this record?')){ await del('records', Number(btn.dataset.del)); loadRecords(); refreshDashboard(); }
-    }));
-  }
-
-  $('#filters').addEventListener('submit',(e)=>{ e.preventDefault(); loadRecords(); });
-
-  async function fillLookups(){
-    const [vehicles, drivers] = await Promise.all([all('vehicles'), all('drivers')]);
-    const vehSelAdd = $('#form-record [name=vehicle_id]');
-    const drvSelAdd = $('#form-record [name=driver_id]');
-    const vehSelF = $('#filters [name=veh]');
-    const drvSelF = $('#filters [name=drv]');
-    vehSelAdd.innerHTML = '<option value="">— Select —</option>';
-    drvSelAdd.innerHTML = '<option value="">— Select —</option>';
-    vehSelF.innerHTML = '<option value="">All</option>';
-    drvSelF.innerHTML = '<option value="">All</option>';
-    for(const v of vehicles){
-      const o1 = new Option(v.vehicle_no, v.id); vehSelAdd.add(o1);
-      const o2 = new Option(v.vehicle_no, v.id); vehSelF.add(o2);
-    }
-    for(const d of drivers){
-      const o1 = new Option(d.name, d.id); drvSelAdd.add(o1);
-      const o2 = new Option(d.name, d.id); drvSelF.add(o2);
-    }
-  }
-
-  // ------- Dashboard -------
-  async function refreshDashboard(){
-    const [records, vehicles, drivers] = await Promise.all([all('records'), all('vehicles'), all('drivers')]);
-    const income = records.filter(r=>r.rtype==='Income').reduce((a,b)=>a+b.amount,0);
-    const expense = records.filter(r=>r.rtype==='Expense').reduce((a,b)=>a+b.amount,0);
-    $('#sum-income').textContent = formatINR(income);
-    $('#sum-expense').textContent = formatINR(expense);
-    $('#sum-net').textContent = formatINR(income - expense);
-    $('#count-drivers').textContent = drivers.length;
-    $('#count-vehicles').textContent = vehicles.length;
-
-    const vehMap = new Map(vehicles.map(v=>[v.id, v.vehicle_no]));
-    const drvMap = new Map(drivers.map(d=>[d.id, d.name]));
-    const recent = [...records].sort((a,b)=>b.created_at-a.created_at).slice(0,10);
-    const tb = $('#recent-records tbody'); tb.innerHTML='';
-    for(const r of recent){
-      const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${r.rdate}</td>><td>${escapeHTML(vehMap.get(r.vehicle_id)||'')}</td><td>${escapeHTML(drvMap.get(r.driver_id)||'')}</td><td>${escapeHTML(r.description||'')}</td><td>${r.rtype}</td><td>${formatINR(r.amount)}</td>`;
-      tb.appendChild(tr);
-    }
-  }
-
-  // ------- Export CSV (Records) -------
-  $('#export-records').addEventListener('click', async ()=>{
-    const [records, vehicles, drivers] = await Promise.all([all('records'), all('vehicles'), all('drivers')]);
-    const vehMap = new Map(vehicles.map(v=>[v.id, v.vehicle_no]));
-    const drvMap = new Map(drivers.map(d=>[d.id, d.name]));
-    const rows = [['S No','Date','Vehicle','Driver','Description','Type','Amount','Status','Category','Pay Mode','Note']];
-    let i=1;
-    for(const r of records.sort((a,b)=>a.rdate.localeCompare(b.rdate))){
-      rows.push([i++, r.rdate, vehMap.get(r.vehicle_id)||'', drvMap.get(r.driver_id)||'', r.description||'', r.rtype, r.amount, r.status, r.category, r.paymode, r.note||'']);
-    }
-    downloadCSV(rows, 'records.csv');
-  });
-
-  // ------- Monthly Report -------
-  $('#report-form').addEventListener('submit', async (e)=>{
-    e.preventDefault();
-    runReport(e.target.month.value);
-  });
-
-  async function runReport(monthStr){
-    const [records, vehicles] = await Promise.all([all('records'), all('vehicles')]);
-    const vehMap = new Map(vehicles.map(v=>[v.id, v.vehicle_no]));
-    const first = monthStr ? (monthStr + '-01') : new Date().toISOString().slice(0,7) + '-01';
-    const yyyy = first.slice(0,4), mm = first.slice(5,7);
-    const last = new Date(Number(yyyy), Number(mm), 0).toISOString().slice(0,10);
-    const inMonth = records.filter(r=> r.rdate >= first && r.rdate <= last);
-
-    const income = inMonth.filter(r=>r.rtype==='Income').reduce((a,b)=>a+b.amount,0);
-    const expense = inMonth.filter(r=>r.rtype==='Expense').reduce((a,b)=>a+b.amount,0);
-    $('#rep-income').textContent = formatINR(income);
-    $('#rep-expense').textContent = formatINR(expense);
-    $('#rep-net').textContent = formatINR(income - expense);
-
-    // Vehicle summary
-    const map = new Map();
-    for(const r of inMonth){
-      const key = vehMap.get(r.vehicle_id) || '—';
-      if(!map.has(key)) map.set(key, {inc:0,exp:0});
-      if(r.rtype==='Income') map.get(key).inc += r.amount; else map.get(key).exp += r.amount;
-    }
-    const tbV = $('#rep-vehicle tbody'); tbV.innerHTML='';
-    for(const [veh, val] of map){
-      const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${escapeHTML(veh)}</td><td>${formatINR(val.inc)}</td><td>${formatINR(val.exp)}</td><td>${formatINR(val.inc - val.exp)}</td>`;
-      tbV.appendChild(tr);
-    }
-
-    // Category breakdown
-    const cat = new Map();
-    for(const r of inMonth.filter(x=>x.rtype==='Expense')){
-      cat.set(r.category, (cat.get(r.category)||0) + r.amount);
-    }
-    const tbC = $('#rep-category tbody'); tbC.innerHTML='';
-    for(const [c, v] of cat){
-      const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${escapeHTML(c)}</td><td>${formatINR(v)}</td>`;
-      tbC.appendChild(tr);
-    }
-
-    // Export CSV for report
-    $('#export-report').onclick = ()=>{
-      const rows = [['Month', first.slice(0,7)], [], ['Total Income', income], ['Total Expense', expense], ['Net', income-expense], [], ['Vehicle','Income','Expense','Net']];
-      for(const [veh, val] of map){ rows.push([veh, val.inc, val.exp, val.inc - val.exp]); }
-      rows.push([]); rows.push(['Expense by Category','Amount']);
-      for(const [c, v] of cat){ rows.push([c, v]); }
-      downloadCSV(rows, `monthly_report_${first.slice(0,7)}.csv`);
-    };
-  }
-
-  // ------- Backup / Restore -------
-  $('#btn-backup').addEventListener('click', async ()=>{
-    const [drivers, vehicles, records] = await Promise.all([all('drivers'), all('vehicles'), all('records')]);
-    const obj = { ts: Date.now(), drivers, vehicles, records };
-    const blob = new Blob([JSON.stringify(obj)], {type:'application/json'});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = 'transport_backup.json'; a.click();
-    URL.revokeObjectURL(url);
-  });
-
-  $('#file-restore').addEventListener('change', async (e)=>{
-    const file = e.target.files[0]; if(!file) return;
-    const json = JSON.parse(await file.text());
-    const tx1 = db.transaction(['drivers','vehicles','records'], 'readwrite');
-    for(const s of ['drivers','vehicles','records']) tx1.objectStore(s).clear();
-    await new Promise(res=>{ tx1.oncomplete = res; });
-    for(const d of json.drivers||[]) await add('drivers', d);
-    for(const v of json.vehicles||[]) await add('vehicles', v);
-    for(const r of json.records||[]) await add('records', r);
-    alert('Restore complete');
-    loadDrivers(); loadVehicles(); fillLookups(); loadRecords(); refreshDashboard();
-  });
-
-  // ------- Helpers -------
-  function fileToStored(file){
-    return new Promise((resolve)=>{
-      const fr = new FileReader();
-      fr.onload = ()=> resolve({ name:file.name, type:file.type, size:file.size, data: fr.result });
-      fr.readAsDataURL(file); // store as base64 data URL for portability
-    });
-  }
-
-  function docLink(doc, label){
-    if(!doc) return '';
-    const url = doc.data; // data URL
-    return `<a href="${url}" target="_blank">${label}</a>`;
-  }
-
-  function escapeHTML(s){ return (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-
-  function downloadCSV(rows, filename){
-    const csv = rows.map(r=> r.map(x => {
-      const s = String(x??'');
-      return /[",\n]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s;
-    }).join(','))
-    .join('\n');
-    const blob = new Blob([csv], {type:'text/csv'});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href=url; a.download=filename; a.click();
-    URL.revokeObjectURL(url);
-  }
-
-  // Default month prefill
-  const mf = $('#report-form [name=month]'); if(mf){ const m = new Date().toISOString().slice(0,7); mf.value = m; runReport(m); }
-
+  async function runMonthlyReport(month){const [rows,vs]=await Promise.all([all('records'),all('vehicles')]),m=month||today().slice(0,7),first=m+'-01',last=new Date(+m.slice(0,4),+m.slice(5),0).toISOString().slice(0,10),data=rows.filter(r=>r.rdate>=first&&r.rdate<=last),inc=data.filter(r=>r.rtype==='Income').reduce((a,r)=>a+Number(r.amount||0),0),exp=data.filter(r=>r.rtype==='Expense').reduce((a,r)=>a+Number(r.amount||0),0);$('#rep-income').textContent='₹'+inc.toFixed(2);$('#rep-expense').textContent='₹'+exp.toFixed(2);$('#rep-net').textContent='₹'+(inc-exp).toFixed(2);const vm=new Map(vs.map(v=>[v.id,v.vehicle_no])),map=new Map();data.forEach(r=>{const k=vm.get(r.vehicle_id)||'—';if(!map.has(k))map.set(k,[0,0]);if(r.rtype==='Income')map.get(k)[0]+=Number(r.amount||0);if(r.rtype==='Expense')map.get(k)[1]+=Number(r.amount||0);});const tb=$('#rep-vehicle tbody');tb.innerHTML='';map.forEach((v,k)=>{const tr=document.createElement('tr');tr.innerHTML=`<td>${esc(k)}</td><td>${v[0].toFixed(2)}</td><td>${v[1].toFixed(2)}</td><td>${(v[0]-v[1]).toFixed(2)}</td>`;tb.appendChild(tr);});}
+  $('#report-form').onsubmit=e=>{e.preventDefault();runMonthlyReport(e.target.elements.month.value);};
+  $('#btn-backup').onclick=async()=>{const [drivers,vehicles,attendance,records]=await Promise.all([all('drivers'),all('vehicles'),all('attendance'),all('records')]);downloadFile(JSON.stringify({ts:Date.now(),drivers,vehicles,attendance,records}),'transport_backup.json','application/json');};
+  $('#file-restore').onchange=async e=>{const file=e.target.files[0];if(!file)return;const data=JSON.parse(await file.text()),names=['drivers','vehicles','attendance','records'],t=db.transaction(names,'readwrite');names.forEach(n=>t.objectStore(n).clear());await new Promise(r=>t.oncomplete=r);for(const n of names)for(const row of data[n]||[])await add(n,row);alert('Restore complete');fillLookups();fillAttendanceLookups();fillDriverReportDrivers();loadRecords();loadAttendance();runDriverReport();};
+  function fileStored(file){return new Promise(resolve=>{const r=new FileReader();r.onload=()=>resolve({name:file.name,type:file.type,size:file.size,data:r.result});r.readAsDataURL(file);});}
+  function docLink(d,label){return `<a href="${d.data}" target="_blank">${label}</a>`;}
+  function downloadExcel(rows,name){downloadFile('<html><body><table>'+rows.map(r=>'<tr>'+r.map(x=>`<td>${esc(x)}</td>`).join('')+'</tr>').join('')+'</table></body></html>',name,'application/vnd.ms-excel');}
+  function downloadFile(content,name,type){const u=URL.createObjectURL(new Blob([content],{type})),a=document.createElement('a');a.href=u;a.download=name;a.click();URL.revokeObjectURL(u);}
 })();
